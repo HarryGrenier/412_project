@@ -41,6 +41,18 @@ class Database:
                 else:
                     return None
 
+    def get_leaderboard_data(self):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT u.UserID, u.FirstName, u.LastName, COALESCE(SUM(s.Amount), 0) AS TotalSavings
+                    FROM Users u
+                    LEFT JOIN Savings s ON u.UserID = s.UserID
+                    GROUP BY u.UserID, u.FirstName, u.LastName
+                    ORDER BY TotalSavings DESC;
+                """)
+                return cur.fetchall()
+
     def create_user(self, first_name, last_name, email, password):
         with self.connect() as conn:
             with conn.cursor() as cur:
@@ -1071,9 +1083,12 @@ class DashboardWindow:
         view_projections_button.pack(pady=10, ipadx=50, ipady=10)
 
         # Inbox Button
-        inbox_button = tk.Button(self.dashboard, text="Inbox", **button_style)
-        inbox_button.pack(pady=10, ipadx=50, ipady=10)
-    
+        leader_button = tk.Button(self.dashboard, text="Leader Board", **button_style, command=self.open_leaderboard_window)
+        leader_button.pack(pady=10, ipadx=50, ipady=10)
+    def open_leaderboard_window(self):
+        self.dashboard.destroy()
+        LeaderboardWindow(self.database)
+
     def open_savings_window(self):
         self.dashboard.destroy()  # Close the dashboard window
         SavingsWindow(self.database, self.user_id)  # Open the savings window
@@ -1081,6 +1096,48 @@ class DashboardWindow:
     def open_challenges_window(self):
         self.dashboard.destroy()  # Close the dashboard window
         ChallengesWindow(self.database, self.user_id)  # Open the challenges window
+
+class LeaderboardWindow:
+    def __init__(self, database):
+        self.database = database
+        self.window = tk.Tk()
+        self.window.title("Savings Leaderboard")
+        self.window.geometry("800x600")  # Adjust the size as needed
+
+        self.create_widgets()
+        self.load_leaderboard_data()
+        self.window.mainloop()
+
+    def create_widgets(self):
+        # Leaderboard label
+        tk.Label(self.window, text="Savings Leaderboard", font=("Arial", 24)).pack(pady=20)
+
+        # Treeview for displaying leaderboard
+        self.leaderboard_tree = ttk.Treeview(self.window, columns=("Rank", "UserID", "FirstName", "LastName", "TotalSavings"), show='headings')
+        self.leaderboard_tree.column("Rank", width=50)
+        self.leaderboard_tree.column("UserID", width=100)
+        self.leaderboard_tree.column("FirstName", width=150)
+        self.leaderboard_tree.column("LastName", width=150)
+        self.leaderboard_tree.column("TotalSavings", width=150)
+
+        self.leaderboard_tree.heading("Rank", text="Rank")
+        self.leaderboard_tree.heading("UserID", text="UserID")
+        self.leaderboard_tree.heading("FirstName", text="First Name")
+        self.leaderboard_tree.heading("LastName", text="Last Name")
+        self.leaderboard_tree.heading("TotalSavings", text="Total Savings")
+
+        self.leaderboard_tree.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+    def load_leaderboard_data(self):
+        # Fetch leaderboard data from the database
+        leaderboard_data = self.database.get_leaderboard_data()
+
+        # Sort the data based on TotalSavings in descending order
+        sorted_data = sorted(leaderboard_data, key=lambda x: x[-1], reverse=True)
+
+        # Insert sorted data into the treeview
+        for index, item in enumerate(sorted_data, start=1):
+            self.leaderboard_tree.insert('', tk.END, values=(index,) + item)
 
 
 

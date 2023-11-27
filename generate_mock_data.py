@@ -9,13 +9,10 @@ def generate_users(n):
     for _ in range(n):
         first_name = fake.first_name()
         last_name = fake.last_name()
-        email = fake.email()
+        email = first_name+last_name+"@gmail.com"
         password = fake.password()
         date_joined = fake.date_between(start_date='-5y', end_date='today').strftime('%Y-%m-%d')
-        total_savings = round(random.uniform(1000, 10000), 2)
-        total_expenses = round(random.uniform(500, 9000), 2)
-        bank_balance = total_savings - total_expenses
-        users.append((first_name, last_name, email, password, date_joined, total_savings, total_expenses, bank_balance))
+        users.append((first_name, last_name, email, password, date_joined))
     return users
 
 def generate_groups(n):
@@ -101,7 +98,7 @@ def main():
     user_groups = generate_user_groups(n_user_groups, n_users, n_groups)
     user_challenges = generate_user_challenges(n_user_challenges, n_users, n_challenges)
 
-    save_to_file('mock_data.sql', users, 'Users', ['FirstName', 'LastName', 'Email', 'Password', 'DateJoined', 'TotalSavings', 'TotalExpenses', 'BankBalance'])
+    save_to_file('mock_data.sql', users, 'Users', ['FirstName', 'LastName', 'Email', 'Password', 'DateJoined'])
     save_to_file('mock_data.sql', groups, 'Groups', ['GroupName', 'Description', 'GroupGoal', 'CurrentGroupSavings'])
     save_to_file('mock_data.sql', expenses, 'Expenses', ['UserID', 'Amount', 'Category', 'Date'])
     save_to_file('mock_data.sql', savings, 'Savings', ['UserID', 'Amount', 'Purpose', 'Date'])
