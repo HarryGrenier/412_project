@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import messagebox, Toplevel, Menu, ttk
+from tkinter import messagebox, Toplevel, Menu, ttk, PhotoImage
+from typing import Self
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.dates as mdates
@@ -41,18 +42,65 @@ class Database:
                 else:
                     return None
 
-    def get_leaderboard_data(self):
+    def get_savings_leaderboard_data(self):
         with self.connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT u.UserID, u.FirstName, u.LastName, COALESCE(SUM(s.Amount), 0) AS TotalSavings
-                    FROM Users u
-                    LEFT JOIN Savings s ON u.UserID = s.UserID
-                    GROUP BY u.UserID, u.FirstName, u.LastName
-                    ORDER BY TotalSavings DESC;
-                """)
+                # SQL query to fetch user details and their total savings
+                query = """
+                SELECT u.UserID, u.FirstName, u.LastName, COALESCE(SUM(s.Amount), 0) AS TotalSavings
+                FROM Users u
+                LEFT JOIN Savings s ON u.UserID = s.UserID
+                GROUP BY u.UserID
+                ORDER BY TotalSavings DESC;
+                """
+                cur.execute(query)
                 return cur.fetchall()
-
+            
+    def get_expense_leaderboard_data(self):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                # SQL query to fetch user details and their total savings
+                query = """
+                SELECT u.UserID, u.FirstName, u.LastName, COALESCE(SUM(e.Amount), 0) AS TotalExpense
+                FROM Users u
+                LEFT JOIN Expenses e ON u.UserID = e.UserID
+                GROUP BY u.UserID
+                ORDER BY TotalExpense DESC
+                """
+                cur.execute(query)
+                return cur.fetchall()
+            
+    def get_net_worth_leaderboard_data(self):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                query = """
+                WITH TotalSavings AS (
+                    SELECT UserID, COALESCE(SUM(Amount), 0) AS SavingsTotal
+                    FROM Savings
+                    GROUP BY UserID
+                ),
+                TotalExpenses AS (
+                    SELECT UserID, COALESCE(SUM(Amount), 0) AS ExpensesTotal
+                    FROM Expenses
+                    GROUP BY UserID
+                )
+                SELECT u.UserID, u.FirstName, u.LastName, 
+                       COALESCE(ts.SavingsTotal, 0) - COALESCE(te.ExpensesTotal, 0) AS NetWorth
+                FROM Users u
+                LEFT JOIN TotalSavings ts ON u.UserID = ts.UserID
+                LEFT JOIN TotalExpenses te ON u.UserID = te.UserID
+                ORDER BY NetWorth DESC;
+                """
+                cur.execute(query)
+                return cur.fetchall()
+            
+    def get_total_number_of_users(self):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM Users;")
+                result = cur.fetchone()
+                return result[0] if result else 0
+        
     def create_user(self, first_name, last_name, email, password):
         with self.connect() as conn:
             with conn.cursor() as cur:
@@ -1087,7 +1135,7 @@ class DashboardWindow:
         leader_button.pack(pady=10, ipadx=50, ipady=10)
     def open_leaderboard_window(self):
         self.dashboard.destroy()
-        LeaderboardWindow(self.database)
+        OverallPlacementWindow(self.database, self.user_id)
 
     def open_savings_window(self):
         self.dashboard.destroy()  # Close the dashboard window
@@ -1097,20 +1145,42 @@ class DashboardWindow:
         self.dashboard.destroy()  # Close the dashboard window
         ChallengesWindow(self.database, self.user_id)  # Open the challenges window
 
-class LeaderboardWindow:
-    def __init__(self, database):
+class SavingsLeaderboardWindow:
+    def __init__(self, database, user_id):
         self.database = database
+        self.user_id = user_id
         self.window = tk.Tk()
         self.window.title("Savings Leaderboard")
-        self.window.geometry("800x600")  # Adjust the size as needed
+        self.window.geometry("1200x1200")  # Adjust the size as needed
 
         self.create_widgets()
-        self.load_leaderboard_data()
+        self.load_leaderboard_data("all")
         self.window.mainloop()
 
     def create_widgets(self):
+        # Menu bar setup
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+
+        # Leaderboard options menu
+        leaderboard_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Leaderboard Options", menu=leaderboard_menu)
+        leaderboard_menu.add_command(label="Overall Placement", command=self.overall_placement)
+        leaderboard_menu.add_command(label="Expenses Leaderboard", command=self.expenses_leaderboard)
+        leaderboard_menu.add_command(label="Net Worth Leaderboard", command=self.net_worth_leaderboard)
+        
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
         # Leaderboard label
         tk.Label(self.window, text="Savings Leaderboard", font=("Arial", 24)).pack(pady=20)
+
+        # Buttons for leaderboard limits
+        buttons_frame = tk.Frame(self.window)
+        buttons_frame.pack(pady=10)
+        tk.Button(buttons_frame, text="Top 10", command=lambda: self.load_leaderboard_data("top10")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Top 50", command=lambda: self.load_leaderboard_data("top50")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Top 100", command=lambda: self.load_leaderboard_data("top100")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Show All", command=lambda: self.load_leaderboard_data("all")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Refresh", command=lambda: self.load_leaderboard_data("all")).pack(side=tk.RIGHT)
 
         # Treeview for displaying leaderboard
         self.leaderboard_tree = ttk.Treeview(self.window, columns=("Rank", "UserID", "FirstName", "LastName", "TotalSavings"), show='headings')
@@ -1128,18 +1198,309 @@ class LeaderboardWindow:
 
         self.leaderboard_tree.pack(side="left", fill="both", expand=True, padx=10, pady=10)
 
-    def load_leaderboard_data(self):
+    def load_leaderboard_data(self, limit):
+        # Clear the treeview
+        for i in self.leaderboard_tree.get_children():
+            self.leaderboard_tree.delete(i)
+
         # Fetch leaderboard data from the database
-        leaderboard_data = self.database.get_leaderboard_data()
+        leaderboard_data = self.database.get_savings_leaderboard_data()
 
         # Sort the data based on TotalSavings in descending order
         sorted_data = sorted(leaderboard_data, key=lambda x: x[-1], reverse=True)
+
+        # Apply limit
+        if limit == "top10":
+            sorted_data = sorted_data[:10]
+        elif limit == "top50":
+            sorted_data = sorted_data[:50]
+        elif limit == "top100":
+            sorted_data = sorted_data[:100]
+        # 'all' will show all entries
 
         # Insert sorted data into the treeview
         for index, item in enumerate(sorted_data, start=1):
             self.leaderboard_tree.insert('', tk.END, values=(index,) + item)
 
+    # Placeholder methods for menu commands
+    def back_to_dashboard(self):
+        self.window.destroy()  # Close the savings window
+        DashboardWindow(self.database, self.user_id)
 
+    def overall_placement(self):
+        self.window.destroy()
+        OverallPlacementWindow(self.database, self.user_id)  # Implement the functionality
+
+    def expenses_leaderboard(self):
+        self.window.destroy()
+        ExpenseLeaderboardWindow(self.database, self.user_id)  # Implement the functionality
+
+    def net_worth_leaderboard(self):
+        self.window.destroy()
+        NetWorthLeaderboardWindow(self.database, self.user_id)
+
+
+class ExpenseLeaderboardWindow:
+    def __init__(self, database, user_id):
+        self.database = database
+        self.user_id = user_id
+        self.window = tk.Tk()
+        self.window.title("Expense Leaderboard")
+        self.window.geometry("1200x1200")  # Adjust the size as needed
+
+        self.create_widgets()
+        self.load_leaderboard_data("all")
+        self.window.mainloop()
+
+    def create_widgets(self):
+        # Menu bar setup
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+
+        # Leaderboard options menu
+        leaderboard_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Leaderboard Options", menu=leaderboard_menu)
+        leaderboard_menu.add_command(label="Overall Placement", command=self.overall_placement)
+        leaderboard_menu.add_command(label="Savings Leaderboard", command=self.savings_leaderboard)
+        leaderboard_menu.add_command(label="Net Worth Leaderboard", command=self.net_worth_leaderboard)
+
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        # Leaderboard label
+        tk.Label(self.window, text="Big Spenders", font=("Arial", 24)).pack(pady=20)
+
+        # Buttons for leaderboard limits
+        buttons_frame = tk.Frame(self.window)
+        buttons_frame.pack(pady=10)
+        tk.Button(buttons_frame, text="Top 10", command=lambda: self.load_leaderboard_data("top10")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Top 50", command=lambda: self.load_leaderboard_data("top50")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Top 100", command=lambda: self.load_leaderboard_data("top100")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Show All", command=lambda: self.load_leaderboard_data("all")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Refresh", command=lambda: self.load_leaderboard_data("all")).pack(side=tk.RIGHT)
+
+        self.leaderboard_tree = ttk.Treeview(self.window, columns=("Rank", "UserID", "FirstName", "LastName", "TotalExpense"), show='headings')
+        self.leaderboard_tree.column("Rank", width=50)
+        self.leaderboard_tree.column("UserID", width=100)
+        self.leaderboard_tree.column("FirstName", width=150)
+        self.leaderboard_tree.column("LastName", width=150)
+        self.leaderboard_tree.column("TotalExpense", width=150)
+
+        self.leaderboard_tree.heading("Rank", text="Rank")
+        self.leaderboard_tree.heading("UserID", text="UserID")
+        self.leaderboard_tree.heading("FirstName", text="First Name")
+        self.leaderboard_tree.heading("LastName", text="Last Name")
+        self.leaderboard_tree.heading("TotalExpense", text="Total Expense")
+
+        self.leaderboard_tree.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+    def load_leaderboard_data(self, limit):
+        # Clear the treeview
+        for i in self.leaderboard_tree.get_children():
+            self.leaderboard_tree.delete(i)
+
+        # Fetch leaderboard data from the database
+        leaderboard_data = self.database.get_expense_leaderboard_data()
+
+        # Sort the data based on TotalSavings in descending order
+        sorted_data = sorted(leaderboard_data, key=lambda x: x[-1], reverse=True)
+
+        # Apply limit
+        if limit == "top10":
+            sorted_data = sorted_data[:10]
+        elif limit == "top50":
+            sorted_data = sorted_data[:50]
+        elif limit == "top100":
+            sorted_data = sorted_data[:100]
+        # 'all' will show all entries
+
+        # Insert sorted data into the treeview
+        for index, item in enumerate(sorted_data, start=1):
+            self.leaderboard_tree.insert('', tk.END, values=(index,) + item)
+
+    # Placeholder methods for menu commands
+    def back_to_dashboard(self):
+        self.window.destroy()  # Close the savings window
+        DashboardWindow(self.database, self.user_id)
+
+    def overall_placement(self):
+        self.window.destroy()
+        OverallPlacementWindow(self.database, self.user_id)  # Implement the functionality
+
+    def savings_leaderboard(self):
+        self.window.destroy()
+        SavingsLeaderboardWindow(self.database, self.user_id)  # Implement the functionality
+
+    def net_worth_leaderboard(self):
+        self.window.destroy()
+        NetWorthLeaderboardWindow(self.database, self.user_id)
+
+
+class NetWorthLeaderboardWindow:
+    def __init__(self, database, user_id):
+        self.database = database
+        self.user_id = user_id
+        self.window = tk.Tk()
+        self.window.title("Net Worth Leaderboard")
+        self.window.geometry("1200x1200")  # Adjust the size as needed
+
+        self.create_widgets()
+        self.load_leaderboard_data("all")
+        self.window.mainloop()
+
+    def create_widgets(self):
+        # Menu bar setup
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+
+        # Leaderboard options menu
+        leaderboard_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Leaderboard Options", menu=leaderboard_menu)
+        leaderboard_menu.add_command(label="Overall Placement", command=self.overall_placement)
+        leaderboard_menu.add_command(label="Savings Leaderboard", command=self.savings_leaderboard)
+        leaderboard_menu.add_command(label="Expenses Leaderboard", command=self.expenses_leaderboard)
+
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        # Leaderboard label
+        tk.Label(self.window, text="Net Worth Leaderboard", font=("Arial", 24)).pack(pady=20)
+
+        # Buttons for leaderboard limits
+        buttons_frame = tk.Frame(self.window)
+        buttons_frame.pack(pady=10)
+        tk.Button(buttons_frame, text="Top 10", command=lambda: self.load_leaderboard_data("top10")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Top 50", command=lambda: self.load_leaderboard_data("top50")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Top 100", command=lambda: self.load_leaderboard_data("top100")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Show All", command=lambda: self.load_leaderboard_data("all")).pack(side=tk.LEFT)
+        tk.Button(buttons_frame, text="Refresh", command=lambda: self.load_leaderboard_data("all")).pack(side=tk.RIGHT)
+
+        # Treeview for displaying leaderboard
+        self.leaderboard_tree = ttk.Treeview(self.window, columns=("Rank", "UserID", "FirstName", "LastName", "NetWorth"), show='headings')
+        self.leaderboard_tree.column("Rank", width=50)
+        self.leaderboard_tree.column("UserID", width=100)
+        self.leaderboard_tree.column("FirstName", width=150)
+        self.leaderboard_tree.column("LastName", width=150)
+        self.leaderboard_tree.column("NetWorth", width=150)
+
+        self.leaderboard_tree.heading("Rank", text="Rank")
+        self.leaderboard_tree.heading("UserID", text="UserID")
+        self.leaderboard_tree.heading("FirstName", text="First Name")
+        self.leaderboard_tree.heading("LastName", text="Last Name")
+        self.leaderboard_tree.heading("NetWorth", text="Net Worth")
+
+        self.leaderboard_tree.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+    def load_leaderboard_data(self, limit):
+        # Clear the treeview
+        for i in self.leaderboard_tree.get_children():
+            self.leaderboard_tree.delete(i)
+
+        # Fetch leaderboard data from the database
+        leaderboard_data = self.database.get_net_worth_leaderboard_data()
+
+        # Sort the data based on NetWorth in descending order
+        sorted_data = sorted(leaderboard_data, key=lambda x: x[-1], reverse=True)
+
+        # Apply limit
+        if limit == "top10":
+            sorted_data = sorted_data[:10]
+        elif limit == "top50":
+            sorted_data = sorted_data[:50]
+        elif limit == "top100":
+            sorted_data = sorted_data[:100]
+        # 'all' will show all entries
+
+        # Insert sorted data into the treeview
+        for index, item in enumerate(sorted_data, start=1):
+            self.leaderboard_tree.insert('', tk.END, values=(index,) + item)
+
+    # Placeholder methods for menu commands
+    def back_to_dashboard(self):
+        self.window.destroy()  # Close the savings window
+        DashboardWindow(self.database, self.user_id)
+
+    def overall_placement(self):
+        self.window.destroy()
+        OverallPlacementWindow(self.database, self.user_id)  # Implement the functionality
+
+    def savings_leaderboard(self):
+        self.window.destroy()
+        SavingsLeaderboardWindow(self.database, self.user_id)  # Implement the functionality
+
+    def expenses_leaderboard(self):
+        self.window.destroy()
+        ExpenseLeaderboardWindow(self.database, self.user_id)  # Implement the functionality
+
+import tkinter as tk
+from tkinter import ttk, Menu
+
+class OverallPlacementWindow:
+    def __init__(self, database, user_id):
+        self.database = database
+        self.user_id = user_id
+        self.window = tk.Tk()
+        self.window.title("Overall Placement")
+        self.window.geometry("1200x1200")  # Adjust the size as needed
+
+        self.create_widgets()
+        self.load_user_placement()
+        self.window.mainloop()
+
+    def create_widgets(self):
+        # Menu bar setup
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+
+        # Leaderboard options menu
+        leaderboard_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Leaderboard Options", menu=leaderboard_menu)
+        leaderboard_menu.add_command(label="Savings Leaderboard", command=self.savings_leaderboard)
+        leaderboard_menu.add_command(label="Expenses Leaderboard", command=self.expenses_leaderboard)
+        leaderboard_menu.add_command(label="Net Worth Leaderboard", command=self.net_worth_leaderboard)
+
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        # Placement label
+        self.placement_label = tk.Label(self.window, text="", font=("Arial", 24))
+        self.placement_label.pack(pady=20)
+
+        self.placement2_label = tk.Label(self.window, text="", font=("Arial", 24))
+        self.placement2_label.pack(pady=20)
+        
+        self.placement3_label = tk.Label(self.window, text="", font=("Arial", 24))
+        self.placement3_label.pack(pady=20)
+
+
+    def load_user_placement(self):
+        # Fetch user's overall placement from the database
+        leaderboard_data = self.database.get_net_worth_leaderboard_data()
+        
+        def find_user_position_in_leaderboard(leaderboard_data, user_id):
+        
+            for position, data in enumerate(leaderboard_data, start=1):
+                if data[0] == user_id:  # Assuming the UserID is the first element in the data tuple
+                    return position
+            return None
+        placement = find_user_position_in_leaderboard(leaderboard_data,self.user_id)
+        total_users = self.database.get_total_number_of_users()
+
+        # Update the label with the user's placement
+        self.placement_label.config(text=f"Your Overall Placement: {placement}")
+        self.placement2_label.config(text=f"{placement} / {total_users}")
+        percentile_rank = ((total_users - placement) / (total_users - 1)) * 100
+        self.placement3_label.config(text=f"Your in the Top {percentile_rank} Percentile")
+        # Placeholder methods for menu commands
+    def back_to_dashboard(self):
+        self.window.destroy()  # Close the savings window
+        DashboardWindow(self.database, self.user_id)
+        
+    def savings_leaderboard(self):
+        self.window.destroy()
+        SavingsLeaderboardWindow(self.database, self.user_id)
+
+    def expenses_leaderboard(self):
+        self.window.destroy()
+        ExpenseLeaderboardWindow(self.database, self.user_id)
+
+    def net_worth_leaderboard(self):
+        self.window.destroy()
+        NetWorthLeaderboardWindow(self.database, self.user_id)
 
 if __name__ == "__main__":
     db = Database("savesphere", "postgres", "E8a39ccb71", "127.0.0.1")

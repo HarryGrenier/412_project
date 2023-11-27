@@ -1,5 +1,5 @@
-INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Mark', 'Simpson', 'MarkSimpson@gmail.com', 'nJKgJ&2c$5', '2023-03-07');
-INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Thomas', 'Fuller', 'ThomasFuller@gmail.com', '#hS3pHu9#&', '2019-04-05');
+INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Harry', 'Grenier', 'hg', 'hg', '2023-03-07');
+INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Nick', 'Faciano', 'nf', 'nf', '2019-04-05');
 INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Joanna', 'Wilson', 'JoannaWilson@gmail.com', '%2$dUXyeIR', '2021-02-19');
 INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Edward', 'Gentry', 'EdwardGentry@gmail.com', '6p7qzuK(0_', '2020-04-09');
 INSERT INTO Users (FirstName, LastName, Email, Password, DateJoined) VALUES ('Adam', 'Wilson', 'AdamWilson@gmail.com', 'x+6fKPub(J', '2022-01-11');
