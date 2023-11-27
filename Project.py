@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, Toplevel, Menu, ttk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.dates as mdates
 import psycopg2
 
 def open_login_window():
@@ -117,6 +118,18 @@ class Database:
                     query = "SELECT * FROM Savings WHERE UserID = %s ORDER BY Amount " + order_by
                 elif sort_by == 'date':
                     query = "SELECT * FROM Savings WHERE UserID = %s ORDER BY Date " + order_by
+                # Add more sorting options as needed
+
+                cur.execute(query, (user_id,))
+                return cur.fetchall()
+    def get_user_expenses(self, user_id, sort_by='date', order='asc'):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                order_by = 'DESC' if order == 'desc' else 'ASC'
+                if sort_by == 'amount':
+                    query = "SELECT * FROM Expenses WHERE UserID = %s ORDER BY Amount " + order_by
+                elif sort_by == 'date':
+                    query = "SELECT * FROM Expenses WHERE UserID = %s ORDER BY Date " + order_by
                 # Add more sorting options as needed
 
                 cur.execute(query, (user_id,))
@@ -339,7 +352,7 @@ class SavingsWindow:
         self.user_id = user_id
         self.window = tk.Tk()
         self.window.title("Savings")
-        self.window.geometry("600x400")  # Adjust the size as needed
+        self.window.geometry("1200x1200")  # Adjust the size as needed
         self.create_widgets()
         self.window.mainloop()
 
@@ -384,35 +397,63 @@ class SavingsWindow:
         sort_order_menu = tk.OptionMenu(options_frame, sort_order_var, 'asc', 'desc')
         sort_order_menu.grid(row=0, column=3, padx=5)
 
-        refresh_button = tk.Button(options_frame, text="Refresh", command=lambda: self.refresh_savings(sort_by_var.get(), sort_order_var.get()))
+        filter_var = tk.StringVar(self.window)
+        filter_var.set('both')  # default value
+        filter_menu = tk.OptionMenu(options_frame, filter_var, 'savings', 'expenses', 'both')
+        filter_menu.grid(row=0, column=5, padx=5)
+
+        refresh_button = tk.Button(options_frame, text="Refresh", command=lambda: self.refresh_data(sort_by_var.get(), sort_order_var.get(), filter_var.get()))
         refresh_button.grid(row=0, column=4, padx=5)
 
         # Treeview for displaying savings
-        self.savings_tree = ttk.Treeview(self.window, columns=("ID", "Amount", "Purpose", "Date"), show='headings')
-        self.savings_tree.column("ID", width=50)       # Adjust the width as needed
+        self.savings_tree = ttk.Treeview(self.window, columns=("Type", "ID", "Amount", "Purpose/Category", "Date"), show='headings')
+        self.savings_tree.column("Type", width=60)  # New column for type
+        self.savings_tree.column("ID", width=50)    # Adjust the width as needed
         self.savings_tree.column("Amount", width=100)  # Adjust the width as needed
-        self.savings_tree.column("Purpose", width=150) # Adjust the width as needed
+        self.savings_tree.column("Purpose/Category", width=150) # Adjust the width as needed
         self.savings_tree.column("Date", width=100)    # Adjust the width as needed
 
+        self.savings_tree.heading("Type", text="Type")
         self.savings_tree.heading("ID", text="ID")
         self.savings_tree.heading("Amount", text="Amount")
-        self.savings_tree.heading("Purpose", text="Purpose")
+        self.savings_tree.heading("Purpose/Category", text="Purpose/Category")
         self.savings_tree.heading("Date", text="Date")
 
         self.savings_tree.pack(side="left", fill="both", expand=True, padx=10, pady=10)
 
         # Initial loading of savings
-        self.refresh_savings("date", "asc")
+        self.refresh_data("date", "asc", 'both')
 
-    def refresh_savings(self, sort_by, order):
+    def refresh_data(self, sort_by, order, filter_type):
         for i in self.savings_tree.get_children():
             self.savings_tree.delete(i)  # Clear the treeview
 
-        # Fetch and insert savings into the treeview
-        savings = self.database.get_user_savings(self.user_id, sort_by, order)
-        for saving in savings:
-            # Map the savings data to the Treeview columns, skipping the UserID
-            self.savings_tree.insert('', tk.END, values=(saving[0], saving[2], saving[3], saving[4]))
+        combined_data = []
+
+        if filter_type in ['both', 'savings']:
+            savings = self.database.get_user_savings(self.user_id, sort_by, order)
+            for saving in savings:
+                # Assuming saving tuple is in the format: (SavingsID, UserID, Amount, Purpose, Date)
+                combined_data.append(('Saving', saving[0], saving[2], saving[3], saving[4]))
+
+        if filter_type in ['both', 'expenses']:
+            expenses = self.database.get_user_expenses(self.user_id, sort_by, order)
+            for expense in expenses:
+                # Assuming expense tuple is in the format: (ExpenseID, UserID, Amount, Category, Date)
+                combined_data.append(('Expense', expense[0], expense[2], expense[3], expense[4]))
+
+        # Sort the combined data
+        sort_index = 4 if sort_by == 'date' else 2  # Adjust based on your sorting criteria
+        combined_data.sort(key=lambda x: x[sort_index], reverse=(order == 'desc'))
+
+        # Insert sorted data into the treeview
+        for item in combined_data:
+            self.savings_tree.insert('', tk.END, values=item, tags=(item[0].lower(),))
+
+        self.savings_tree.tag_configure('saving', background='lightgreen')
+        self.savings_tree.tag_configure('expense', background='lightcoral')
+
+
     def back_to_dashboard(self):
         self.window.destroy()  # Close the savings window
         DashboardWindow(self.database, self.user_id)  # Open the dashboard window
@@ -565,7 +606,7 @@ class SavingsStatsWindow:
         self.user_id = user_id
         self.window = tk.Tk()
         self.window.title("Savings")
-        self.window.geometry("600x400")  # Adjust the size as needed
+        self.window.geometry("1200x1200")  # Adjust the size as needed
         self.create_widgets()
         self.window.mainloop()
 
@@ -622,14 +663,30 @@ class SavingsStatsWindow:
         data = self.database.get_savings_expenses_over_time(self.user_id)
         # Assuming data is in the format [(date1, savings1, expenses1), (date2, savings2, expenses2), ...]
 
+        # If dates are already datetime.date objects, no conversion is needed
         dates = [record[0] for record in data]
         savings = [record[1] for record in data]
         expenses = [record[2] for record in data]
 
         fig, ax = plt.subplots()
-        ax.plot(dates, savings, label='Savings')
-        ax.plot(dates, expenses, label='Expenses')
+
+        # Plotting
+        ax.plot(dates, savings, label='Savings', color='green')
+        ax.plot(dates, expenses, label='Expenses', color='red')
+
+        # Formatting the date to make it more readable
+        ax.xaxis.set_major_locator(mdates.MonthLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+        plt.xticks(rotation=45)
+
+        # Adding labels and title
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Amount')
+        ax.set_title('Savings and Expenses Over Time')
         ax.legend()
+
+        # Adjust layout
+        plt.tight_layout()
 
         # Embedding the plot into the Tkinter window
         canvas = FigureCanvasTkAgg(fig, master=self.window)
