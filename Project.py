@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox, Toplevel, Menu, ttk, PhotoImage
+import tkinter.simpledialog as simpledialog
 from typing import Self
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -41,6 +42,103 @@ class Database:
                     return user_record[0]  # Return the UserID
                 else:
                     return None
+
+    def get_group_goals(self, user_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT g.GroupID, g.GroupName, g.GroupGoal, g.CurrentGroupSavings
+                    FROM Groups g
+                    INNER JOIN UserGroups ug ON g.GroupID = ug.GroupID
+                    WHERE ug.UserID = %s;
+                """, (user_id,))
+                return cur.fetchall()
+
+    def get_groups_user_not_member_of(self, user_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT g.GroupID, g.GroupName, g.Description, g.GroupGoal, COUNT(ug.UserID)
+                    FROM Groups g
+                    LEFT JOIN UserGroups ug ON g.GroupID = ug.GroupID
+                    WHERE g.GroupID NOT IN (
+                        SELECT GroupID FROM UserGroups WHERE UserID = %s
+                    )
+                    GROUP BY g.GroupID
+                    ORDER BY g.GroupName;
+                """, (user_id,))
+                return cur.fetchall()
+
+    def create_group(self, user_id, group_name, description, group_goal):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                try:
+                    # Insert the new group
+                    cur.execute("""
+                        INSERT INTO Groups (GroupName, Description, GroupGoal, CurrentGroupSavings, OwnerID) 
+                        VALUES (%s, %s, %s, 0.00, %s) RETURNING GroupID;
+                    """, (group_name, description, group_goal, user_id))
+                    group_id = cur.fetchone()[0]
+
+                    # Associate the creator with the group in UserGroups table
+                    cur.execute("""
+                        INSERT INTO UserGroups (UserID, GroupID) VALUES (%s, %s);
+                    """, (user_id, group_id))
+
+                    conn.commit()
+                    return group_id
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+
+    def edit_group(self, user_id, group_id, new_group_name, new_description, new_group_goal):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                # Check if the user is the owner of the group
+                cur.execute("SELECT OwnerID FROM Groups WHERE GroupID = %s", (group_id,))
+                result = cur.fetchone()
+                if result and result[0] == user_id:
+                    cur.execute("""
+                        UPDATE Groups SET GroupName = %s, Description = %s, GroupGoal = %s 
+                        WHERE GroupID = %s;
+                    """, (new_group_name, new_description, new_group_goal, group_id))
+                    conn.commit()
+                else:
+                    raise Exception("User is not the owner of the group.")
+
+    def delete_group(self, user_id, group_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT OwnerID FROM Groups WHERE GroupID = %s", (group_id,))
+                result = cur.fetchone()
+                if result and result[0] == user_id:
+                    cur.execute("DELETE FROM Groups WHERE GroupID = %s", (group_id,))
+                    conn.commit()
+                else:
+                    raise Exception("User is not the owner of the group.")
+
+    def add_user_to_group(self, user_id, group_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO UserGroups (UserID, GroupID) VALUES (%s, %s);
+                """, (user_id, group_id))
+                conn.commit()
+
+    def add_contribution_to_group(self, group_id, amount):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE Groups SET CurrentGroupSavings = CurrentGroupSavings + %s WHERE GroupID = %s;
+                """, (amount, group_id))
+                conn.commit()
+
+    def get_group_name(self, group_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT GroupName FROM Groups WHERE GroupID = %s", (group_id,))
+                result = cur.fetchone()
+                return result[0] if result else None
 
     def get_savings_leaderboard_data(self):
         with self.connect() as conn:
@@ -1123,7 +1221,7 @@ class DashboardWindow:
         view_savings_button.pack(pady=10, ipadx=50, ipady=10)
 
         # View Goals Button
-        view_goals_button = tk.Button(self.dashboard, text="View Goals", **button_style, command=self.open_challenges_window)
+        view_goals_button = tk.Button(self.dashboard, text="View Challenges", **button_style, command=self.open_challenges_window)
         view_goals_button.pack(pady=10, ipadx=50, ipady=10)
 
         # View Projections Button
@@ -1133,6 +1231,14 @@ class DashboardWindow:
         # Inbox Button
         leader_button = tk.Button(self.dashboard, text="Leader Board", **button_style, command=self.open_leaderboard_window)
         leader_button.pack(pady=10, ipadx=50, ipady=10)
+
+        leader_button = tk.Button(self.dashboard, text="View Groups", **button_style, command=self.open_groups_window)
+        leader_button.pack(pady=10, ipadx=50, ipady=10)
+
+    def open_groups_window(self):
+        self.dashboard.destroy()
+        GroupWindow(self.database, self.user_id)
+
     def open_leaderboard_window(self):
         self.dashboard.destroy()
         OverallPlacementWindow(self.database, self.user_id)
@@ -1145,6 +1251,259 @@ class DashboardWindow:
         self.dashboard.destroy()  # Close the dashboard window
         ChallengesWindow(self.database, self.user_id)  # Open the challenges window
 
+class GroupWindow:
+    def __init__(self, database, user_id):
+        self.database = database
+        self.user_id = user_id
+        self.window = tk.Tk()
+        self.window.title("Goals View")
+        self.window.geometry("1200x1200")  # Adjust the size as needed
+
+        self.create_widgets()
+        self.display_goals()
+        self.window.mainloop()
+
+    def create_widgets(self):
+        # Menu bar setup
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        menubar.add_command(label="Select New Group", command=self.get_new_groups)
+        group_management_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Group Management", menu=group_management_menu)
+        group_management_menu.add_command(label="Create Group", command=self.create_group)
+        group_management_menu.add_command(label="Edit Group", command=self.edit_group)
+        group_management_menu.add_command(label="Delete Group", command=self.delete_group)
+
+        tk.Label(self.window, text="Group View", font=("Arial", 24)).pack(pady=20)
+
+        # Treeview for displaying goals
+        self.goals_tree = ttk.Treeview(self.window, columns=('GroupID', 'GroupName', 'GroupGoal', 'CurrentSavings'), show='headings')
+        self.goals_tree.heading('GroupID', text='Group ID')
+        self.goals_tree.heading('GroupName', text='Group Name')
+        self.goals_tree.heading('GroupGoal', text='Goal Amount')
+        self.goals_tree.heading('CurrentSavings', text='Current Savings')
+        self.goals_tree.column('GroupID', width=100)
+        self.goals_tree.column('GroupName', width=200)
+        self.goals_tree.column('GroupGoal', width=100)
+        self.goals_tree.column('CurrentSavings', width=100)
+        self.goals_tree.bind('<<TreeviewSelect>>', self.on_goal_select)
+        self.goals_tree.pack(expand=True, fill='both')
+
+    def display_goals(self):
+        try:
+            group_goals = self.database.get_group_goals(self.user_id)
+            for goal in group_goals:
+                # Each 'goal' should have GroupID, GroupName, GroupGoal, CurrentGroupSavings
+                self.goals_tree.insert('', 'end', values=goal)
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"An error occurred while fetching goals: {e}")
+
+    def clear_treeview(self):
+        for item in self.goals_tree.get_children():
+            self.goals_tree.delete(item)
+
+    def on_goal_select(self, event):
+        selected_item = self.goals_tree.selection()[0]
+        group_id = self.goals_tree.item(selected_item)['values'][0]
+        self.add_contribution(group_id)
+
+    def add_contribution(self, group_id):
+        amount = simpledialog.askfloat("Contribution", f"Enter contribution amount for {self.database.get_group_name(group_id)}:", parent=self.window)
+        if amount is not None:
+            try:
+                self.database.add_contribution_to_group(group_id, amount)
+                tk.messagebox.showinfo("Success", "Contribution added successfully")
+
+                # Refresh the TreeView
+                self.clear_treeview()
+                self.display_goals()
+
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
+
+    def get_new_groups(self):
+        self.window.destroy()  # Close the savings window
+        SelectGroupWindow(self.database, self.user_id)
+
+
+    def back_to_dashboard(self):
+        self.window.destroy()  # Close the savings window
+        DashboardWindow(self.database, self.user_id)
+
+    def create_group(self):
+        def submit():
+            group_name = name_entry.get()
+            description = desc_entry.get()
+            group_goal = goal_entry.get()
+            # Validate inputs...
+
+            try:
+                self.database.create_group(self.user_id, group_name, description, group_goal)
+                tk.messagebox.showinfo("Success", "Group created successfully")
+                create_window.destroy()
+                self.clear_treeview()
+                self.display_goals()
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
+
+        create_window = Toplevel(self.window)
+        create_window.title("Create Group")
+        create_window.geometry("400x300")
+
+        tk.Label(create_window, text="Group Name:").grid(row=0, column=0)
+        name_entry = tk.Entry(create_window)
+        name_entry.grid(row=0, column=1)
+
+        tk.Label(create_window, text="Description:").grid(row=1, column=0)
+        desc_entry = tk.Entry(create_window)
+        desc_entry.grid(row=1, column=1)
+
+        tk.Label(create_window, text="Group Goal:").grid(row=2, column=0)
+        goal_entry = tk.Entry(create_window)
+        goal_entry.grid(row=2, column=1)
+
+        submit_button = tk.Button(create_window, text="Create Group", command=submit)
+        submit_button.grid(row=3, column=1)
+
+    def edit_group(self):
+        selected_item = self.goals_tree.selection()
+        if not selected_item:
+            tk.messagebox.showwarning("Warning", "No group selected")
+            return
+
+        group_id = self.goals_tree.item(selected_item[0])['values'][0]
+
+        def submit():
+            new_group_name = name_entry.get()
+            new_description = desc_entry.get()
+            new_group_goal = goal_entry.get()
+            # Validate inputs...
+
+            try:
+                self.database.edit_group(self.user_id, group_id, new_group_name, new_description, new_group_goal)
+                tk.messagebox.showinfo("Success", "Group updated successfully")
+                edit_window.destroy()
+                self.clear_treeview()
+                self.display_goals()
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
+
+        edit_window = Toplevel(self.window)
+        edit_window.title("Edit Group")
+        edit_window.geometry("400x300")
+
+        tk.Label(edit_window, text="New Group Name:").grid(row=0, column=0)
+        name_entry = tk.Entry(edit_window)
+        name_entry.grid(row=0, column=1)
+
+        tk.Label(edit_window, text="New Description:").grid(row=1, column=0)
+        desc_entry = tk.Entry(edit_window)
+        desc_entry.grid(row=1, column=1)
+
+        tk.Label(edit_window, text="New Group Goal:").grid(row=2, column=0)
+        goal_entry = tk.Entry(edit_window)
+        goal_entry.grid(row=2, column=1)
+
+        submit_button = tk.Button(edit_window, text="Update Group", command=submit)
+        submit_button.grid(row=3, column=1)
+        
+    def delete_group(self):
+        selected_item = self.goals_tree.selection()
+        if not selected_item:
+            tk.messagebox.showwarning("Warning", "No group selected")
+            return
+
+        group_id = self.goals_tree.item(selected_item[0])['values'][0]
+        group_name = self.goals_tree.item(selected_item[0])['values'][1]
+
+        if tk.messagebox.askyesno("Delete Group", f"Are you sure you want to delete the group '{group_name}'?"):
+            try:
+                self.database.delete_group(self.user_id, group_id)
+                tk.messagebox.showinfo("Success", "Group deleted successfully")
+                self.clear_treeview()
+                self.display_goals()
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
+
+class SelectGroupWindow:
+    def __init__(self, database, user_id):
+        self.database = database
+        self.user_id = user_id
+        self.window = tk.Tk()
+        self.window.title("Goals Select")
+        self.window.geometry("1200x1200")  # Adjust the size as needed
+
+        self.create_widgets()
+        self.display_goals()
+        self.window.mainloop()
+
+    def create_widgets(self):
+        # Menu bar setup
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        menubar.add_command(label="View Your Groups", command=self.View_your_groups_window)
+
+
+        tk.Label(self.window, text="Group View", font=("Arial", 24)).pack(pady=20)
+
+        # Treeview for displaying goals
+        self.goals_tree = ttk.Treeview(self.window, columns=('GroupID', 'GroupName', 'Description', 'GroupGoal', 'NumUsers'), show='headings')
+        self.goals_tree.heading('GroupID', text='Group ID')
+        self.goals_tree.heading('GroupName', text='Group Name')
+        self.goals_tree.heading('Description', text='Description')
+        self.goals_tree.heading('GroupGoal', text='Goal Amount')
+        self.goals_tree.heading('NumUsers', text='Number of Users')
+
+        self.goals_tree.column('GroupID', width=100)
+        self.goals_tree.column('GroupName', width=200)
+        self.goals_tree.column('Description', width=300)
+        self.goals_tree.column('GroupGoal', width=100)
+        self.goals_tree.column('NumUsers', width=100)
+        self.goals_tree.bind('<<TreeviewSelect>>', self.on_goal_select)
+        self.goals_tree.pack(expand=True, fill='both')
+
+
+    def display_goals(self):
+        try:
+            groups = self.database.get_groups_user_not_member_of(self.user_id)
+            for group in groups:
+                # Each 'group' should have GroupID, GroupName, Description, GroupGoal, NumUsers
+                self.goals_tree.insert('', 'end', values=group)
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"An error occurred while fetching groups: {e}")
+
+    def clear_treeview(self):
+        for item in self.goals_tree.get_children():
+            self.goals_tree.delete(item)
+
+    def on_goal_select(self, event):
+        selected_item = self.goals_tree.selection()[0]
+        group_id = self.goals_tree.item(selected_item)['values'][0]
+        group_name = self.goals_tree.item(selected_item)['values'][1]
+
+        if tk.messagebox.askyesno("Join Group", f"Do you want to join the group '{group_name}'?"):
+            try:
+                self.database.add_user_to_group(self.user_id, group_id)
+                tk.messagebox.showinfo("Success", f"You have successfully joined the group '{group_name}'")
+
+                # Refresh the TreeView
+                self.clear_treeview()
+                self.display_goals()
+
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
+
+    def View_your_groups_window(self):
+        self.window.destroy()
+        GroupWindow(self.database, self.user_id)
+
+
+    def back_to_dashboard(self):
+        self.window.destroy()  # Close the savings window
+        DashboardWindow(self.database, self.user_id)
+
 class SavingsLeaderboardWindow:
     def __init__(self, database, user_id):
         self.database = database
@@ -1156,11 +1515,8 @@ class SavingsLeaderboardWindow:
         self.create_widgets()
         self.load_leaderboard_data("all")
         self.window.mainloop()
-
-    def create_widgets(self):
-        # Menu bar setup
-        menubar = Menu(self.window)
-        self.window.config(menu=menubar)
+        def create_widgets(self):
+            menubar = Menu(self.window)
 
         # Leaderboard options menu
         leaderboard_menu = Menu(menubar, tearoff=0)
@@ -1503,5 +1859,5 @@ class OverallPlacementWindow:
         NetWorthLeaderboardWindow(self.database, self.user_id)
 
 if __name__ == "__main__":
-    db = Database("savesphere", "postgres", "E8a39ccb71", "127.0.0.1")
+    db = Database("SaveSphere", "postgres", "e8a39ccb71", "127.0.0.1")
     open_login_window()  # Open the login window directly
