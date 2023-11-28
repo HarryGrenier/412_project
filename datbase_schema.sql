@@ -13,7 +13,8 @@ CREATE TABLE Groups (
   GroupName VARCHAR(255) NOT NULL,
   Description TEXT,
   GroupGoal DECIMAL(10, 2) DEFAULT 0,
-  CurrentGroupSavings DECIMAL(10, 2) DEFAULT 0
+  CurrentGroupSavings DECIMAL(10, 2) DEFAULT 0,
+  OwnerID INT
 );
 
 CREATE TABLE Expenses (

@@ -1515,8 +1515,9 @@ class SavingsLeaderboardWindow:
         self.create_widgets()
         self.load_leaderboard_data("all")
         self.window.mainloop()
-        def create_widgets(self):
-            menubar = Menu(self.window)
+    def create_widgets(self):
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
 
         # Leaderboard options menu
         leaderboard_menu = Menu(menubar, tearoff=0)

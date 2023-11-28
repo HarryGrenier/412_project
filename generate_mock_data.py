@@ -15,14 +15,15 @@ def generate_users(n):
         users.append((first_name, last_name, email, password, date_joined))
     return users
 
-def generate_groups(n):
+def generate_groups(n,user_count):
     groups = []
     for _ in range(n):
         group_name = fake.company()
         description = fake.catch_phrase()
         group_goal = round(random.uniform(5000, 20000), 2)
         current_group_savings = round(random.uniform(1000, group_goal), 2)
-        groups.append((group_name, description, group_goal, current_group_savings))
+        owner_id = random.randint(1, user_count)
+        groups.append((group_name, description, group_goal, current_group_savings, owner_id))
     return groups
 
 def generate_expenses(n, user_count):
@@ -91,7 +92,7 @@ def main():
     n_user_challenges = int(input("Enter the number of User-Challenge relations to generate: "))
 
     users = generate_users(n_users)
-    groups = generate_groups(n_groups)
+    groups = generate_groups(n_groups, n_users)
     expenses = generate_expenses(n_expenses, n_users)
     savings = generate_savings(n_savings, n_users)
     challenges = generate_challenges(n_challenges)
@@ -99,7 +100,7 @@ def main():
     user_challenges = generate_user_challenges(n_user_challenges, n_users, n_challenges)
 
     save_to_file('mock_data.sql', users, 'Users', ['FirstName', 'LastName', 'Email', 'Password', 'DateJoined'])
-    save_to_file('mock_data.sql', groups, 'Groups', ['GroupName', 'Description', 'GroupGoal', 'CurrentGroupSavings'])
+    save_to_file('mock_data.sql', groups, 'Groups', ['GroupName', 'Description', 'GroupGoal', 'CurrentGroupSavings', 'OwnerID'])
     save_to_file('mock_data.sql', expenses, 'Expenses', ['UserID', 'Amount', 'Category', 'Date'])
     save_to_file('mock_data.sql', savings, 'Savings', ['UserID', 'Amount', 'Purpose', 'Date'])
     save_to_file('mock_data.sql', challenges, 'Challenges', ['Name', 'BriefDescription', 'Description', 'StartDate', 'EndDate', 'TargetAmount'])
