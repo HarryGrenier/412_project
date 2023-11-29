@@ -154,6 +154,13 @@ class Database:
                     INSERT INTO UserChallenges (UserID, ChallengeID) VALUES (%s, %s);
                 """, (user_id, challenge_id))
                 conn.commit()
+    def remove_user_from_challenge(self, user_id, challenge_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM UserChallenges WHERE UserID = %s and ChallengeID = %s;
+                """, (user_id, challenge_id))
+                conn.commit()
     def add_contribution_to_group(self, group_id, amount):
         with self.connect() as conn:
             with conn.cursor() as cur:
@@ -527,15 +534,13 @@ class SavingsWindow:
         refresh_button.grid(row=0, column=4, padx=5)
 
         # Treeview for displaying savings
-        self.savings_tree = ttk.Treeview(self.window, columns=("Type", "ID", "Amount", "Purpose/Category", "Date"), show='headings')
+        self.savings_tree = ttk.Treeview(self.window, columns=("Type", "Amount", "Purpose/Category", "Date"), show='headings')
         self.savings_tree.column("Type", width=60)  # New column for type
-        self.savings_tree.column("ID", width=50)    # Adjust the width as needed
         self.savings_tree.column("Amount", width=100)  # Adjust the width as needed
         self.savings_tree.column("Purpose/Category", width=150) # Adjust the width as needed
         self.savings_tree.column("Date", width=100)    # Adjust the width as needed
 
         self.savings_tree.heading("Type", text="Type")
-        self.savings_tree.heading("ID", text="ID")
         self.savings_tree.heading("Amount", text="Amount")
         self.savings_tree.heading("Purpose/Category", text="Purpose/Category")
         self.savings_tree.heading("Date", text="Date")
@@ -555,16 +560,18 @@ class SavingsWindow:
             savings = self.database.get_user_savings(self.user_id, sort_by, order)
             for saving in savings:
                 # Assuming saving tuple is in the format: (SavingsID, UserID, Amount, Purpose, Date)
-                combined_data.append(('Saving', saving[0], saving[2], saving[3], saving[4]))
+                # Omit the SavingsID and UserID
+                combined_data.append(('Saving', saving[2], saving[3], saving[4]))
 
         if filter_type in ['both', 'expenses']:
             expenses = self.database.get_user_expenses(self.user_id, sort_by, order)
             for expense in expenses:
                 # Assuming expense tuple is in the format: (ExpenseID, UserID, Amount, Category, Date)
-                combined_data.append(('Expense', expense[0], expense[2], expense[3], expense[4]))
+                # Omit the ExpenseID and UserID
+                combined_data.append(('Expense', expense[2], expense[3], expense[4]))
 
-        # Sort the combined data
-        sort_index = 4 if sort_by == 'date' else 2  # Adjust based on your sorting criteria
+        # Adjusting the lambda for sorting
+        sort_index = {'date': 3, 'amount': 1}.get(sort_by, 3)  # Mapping sort_by to the correct index in the tuple
         combined_data.sort(key=lambda x: x[sort_index], reverse=(order == 'desc'))
 
         # Insert sorted data into the treeview
@@ -573,6 +580,8 @@ class SavingsWindow:
 
         self.savings_tree.tag_configure('saving', background='lightgreen')
         self.savings_tree.tag_configure('expense', background='lightcoral')
+
+
 
 
     def back_to_dashboard(self):
@@ -991,6 +1000,7 @@ class ChallengesWindow:
         self.challenges_tree.heading('EndDate', text='End Date')
         self.challenges_tree.heading('TargetAmount', text='Target Amount')
         self.challenges_tree.bind('<<TreeviewSelect>>', self.on_challange_select)
+        self.challenges_tree.column('Description', width=400)
         self.challenges_tree.pack(expand=True, fill='both')
 
     def display_challenges(self):
@@ -1010,10 +1020,10 @@ class ChallengesWindow:
         challenge_id = self.challenges_tree.item(selected_item)['values'][0]
         challenge_name = self.challenges_tree.item(selected_item)['values'][1]
 
-        if tk.messagebox.askyesno("Join Challenge", f"Do you want to join the challenge '{challenge_name}'?"):
+        if tk.messagebox.askyesno("Remove Challenge", f"Do you want to remove the challenge '{challenge_name}'?"):
             try:
-                self.database.add_user_to_challenge(self.user_id, challenge_id)
-                tk.messagebox.showinfo("Success", f"You have successfully joined the challenge '{challenge_name}'")
+                self.database.remove_user_from_challenge(self.user_id, challenge_id)
+                tk.messagebox.showinfo("Success", f"You have successfully removed the challenge '{challenge_name}'")
 
                 # Refresh the TreeView
                 self.clear_treeview()
@@ -1021,6 +1031,9 @@ class ChallengesWindow:
 
             except Exception as e:
                 tk.messagebox.showerror("Error", f"An error occurred: {e}")
+    def clear_treeview(self):
+        for item in self.challenges_tree.get_children():
+            self.challenges_tree.delete(item)
 
     def back_to_dashboard(self):
         self.window.destroy()
@@ -1053,6 +1066,10 @@ class SelectChallengeWindow:
         self.challenges_tree.heading('StartDate', text='Start Date')
         self.challenges_tree.heading('EndDate', text='End Date')
         self.challenges_tree.heading('TargetAmount', text='Target Amount')
+
+        # Set the width of the Description column
+        self.challenges_tree.column('Description', width=400)
+
         self.challenges_tree.bind('<<TreeviewSelect>>', self.on_challange_select)
         self.challenges_tree.pack(expand=True, fill='both')
 
@@ -1704,9 +1721,6 @@ class NetWorthLeaderboardWindow:
         self.window.destroy()
         ExpenseLeaderboardWindow(self.database, self.user_id)  # Implement the functionality
 
-import tkinter as tk
-from tkinter import ttk, Menu
-
 class OverallPlacementWindow:
     def __init__(self, database, user_id):
         self.database = database
@@ -1779,5 +1793,5 @@ class OverallPlacementWindow:
         NetWorthLeaderboardWindow(self.database, self.user_id)
 
 if __name__ == "__main__":
-    db = Database("SaveSphere", "postgres", "e8a39ccb71", "127.0.0.1")
+    db = Database("savesphere", "postgres", "E8a39ccb71", "127.0.0.1")
     open_login_window()  # Open the login window directly
