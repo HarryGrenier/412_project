@@ -42,6 +42,28 @@ class Database:
                     return user_record[0]  # Return the UserID
                 else:
                     return None
+    def get_user_challenges(self, user_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT c.ChallengeID, c.Name, c.BriefDescription, c.StartDate, c.EndDate, c.TargetAmount
+                    FROM Challenges c
+                    INNER JOIN UserChallenges uc ON c.ChallengeID = uc.ChallengeID
+                    WHERE uc.UserID = %s;
+                """, (user_id,))
+                return cur.fetchall()
+    def get_challenges_user_not_member_of(self, user_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT c.ChallengeID, c.Name, c.BriefDescription, c.StartDate, c.EndDate, c.TargetAmount
+                    FROM Challenges c
+                    WHERE c.ChallengeID NOT IN (
+                        SELECT ChallengeID FROM UserChallenges WHERE UserID = %s
+                    )
+                    ORDER BY c.Name;
+                """, (user_id,))
+                return cur.fetchall()
 
     def get_group_goals(self, user_id):
         with self.connect() as conn:
@@ -125,6 +147,13 @@ class Database:
                 """, (user_id, group_id))
                 conn.commit()
 
+    def add_user_to_challenge(self, user_id, challenge_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO UserChallenges (UserID, ChallengeID) VALUES (%s, %s);
+                """, (user_id, challenge_id))
+                conn.commit()
     def add_contribution_to_group(self, group_id, amount):
         with self.connect() as conn:
             with conn.cursor() as cur:
@@ -341,45 +370,6 @@ class Database:
                 """
                 cur.execute(query, (user_id, user_id))
                 return cur.fetchall()
-    def get_user_challenges(self, user_id):
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT c.ChallengeID, c.Name, c.Description, c.StartDate, c.EndDate, c.TargetAmount, c.currentAmount
-                    FROM Challenges c
-                    INNER JOIN UserChallenges uc ON c.ChallengeID = uc.ChallengeID
-                    WHERE uc.UserID = %s;
-                """, (user_id,))
-                challenges = cur.fetchall()
-                print("Challenges fetched:", challenges)  # Debug print
-            return challenges
-    def add_new_challenge(self, name, description, end_date, target_amount, user_id):
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                # Insert the new challenge into the Challenges table
-                cur.execute("""
-                    INSERT INTO Challenges (Name, Description, StartDate, EndDate, TargetAmount)
-                    VALUES (%s, %s, CURRENT_DATE, %s, %s) RETURNING ChallengeID;
-                """, (name, description, end_date, target_amount))
-                challenge_id = cur.fetchone()[0]
-
-                # Link the challenge with the user in the UserChallenges table
-                cur.execute("""
-                    INSERT INTO UserChallenges (UserID, ChallengeID)
-                    VALUES (%s, %s);
-                """, (user_id, challenge_id))
-
-                conn.commit()
-                return challenge_id
-    
-            
-    def delete_challenge(self, challenge_id):
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                # Delete the challenge from the Challenges table
-                cur.execute("DELETE FROM Challenges WHERE ChallengeID = %s;", (challenge_id,))
-                conn.commit()
-
 
     def get_user_net_savings(self, user_id):
         with self.connect() as conn:
@@ -391,33 +381,6 @@ class Database:
                     return total_savings - total_expenses
                 else:
                     return 0  # Or handle the user not found case appropriately
-
-
-    def move_money_to_challenge(self, user_id, challenge_id, amount):
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                # First, check if the user has enough net savings
-                net_savings = self.get_user_net_savings(user_id)
-                if net_savings >= amount:
-                    # Update the challenge's currentAmount
-                    cur.execute("""
-                        UPDATE Challenges SET currentAmount = currentAmount + %s WHERE ChallengeID = %s;
-                    """, (amount, challenge_id))
-
-                    # Record the transaction as an expense
-                    cur.execute("""
-                        INSERT INTO Expenses (UserID, Amount, Category, Date) VALUES (%s, %s, 'Challenge Contribution', CURRENT_DATE);
-                    """, (user_id, amount))
-
-                    # Update the user's TotalExpenses
-                    cur.execute("""
-                        UPDATE Users SET TotalExpenses = TotalExpenses + %s WHERE UserID = %s;
-                    """, (amount, user_id))
-
-                    conn.commit()
-                    return True
-                else:
-                    return False  # Not enough savings
 class LoginWindow:
     def __init__(self, database):
         self.database = database
@@ -999,257 +962,135 @@ class SavingsStatsWindow:
         self.window.destroy()  # Close the dashboard window
         SavingsWindow(self.database, self.user_id)
 
-
 class ChallengesWindow:
     def __init__(self, database, user_id):
         self.database = database
         self.user_id = user_id
-        self.challenge_id_map = {}
-
         self.window = tk.Tk()
-        self.window.title("Challenges")
-        self.window.geometry("800x600")
+        self.window.title("Challenges View")
+        self.window.geometry("1200x1200")
 
-        self.create_layout()
-        self.refresh_challenges()
+        self.create_widgets()
+        self.display_challenges()
         self.window.mainloop()
 
-    def create_add_challenge_button(self):
-        add_challenge_button = tk.Button(self.window, text="Add Challenge", command=self.open_add_challenge_window)
-        add_challenge_button.pack(anchor='nw', padx=10, pady=10)
+    def create_widgets(self):
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        menubar.add_command(label="Select New challenges", command=self.challenge_selection)
 
-    def create_return_dashboard_button(self):
-        return_button = tk.Button(self.window, text="Return to Dashboard", command=self.return_to_dashboard)
-        return_button.pack(anchor='ne', padx=10, pady=10)
+        tk.Label(self.window, text="Challenge View", font=("Arial", 24)).pack(pady=20)
 
-    def return_to_dashboard(self):
+        # Treeview for displaying challenges
+        self.challenges_tree = ttk.Treeview(self.window, columns=('ChallengeID', 'Name', 'Description', 'StartDate', 'EndDate', 'TargetAmount'), show='headings')
+        self.challenges_tree.heading('ChallengeID', text='Challenge ID')
+        self.challenges_tree.heading('Name', text='Name')
+        self.challenges_tree.heading('Description', text='Description')
+        self.challenges_tree.heading('StartDate', text='Start Date')
+        self.challenges_tree.heading('EndDate', text='End Date')
+        self.challenges_tree.heading('TargetAmount', text='Target Amount')
+        self.challenges_tree.bind('<<TreeviewSelect>>', self.on_challange_select)
+        self.challenges_tree.pack(expand=True, fill='both')
+
+    def display_challenges(self):
+        try:
+            challenges = self.database.get_user_challenges(self.user_id)
+            for challenge in challenges:
+                self.challenges_tree.insert('', 'end', values=challenge)
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"An error occurred while fetching challenges: {e}")
+
+    def challenge_selection(self):
+        self.window.destroy()
+        SelectChallengeWindow(self.database, self.user_id)
+
+    def on_challange_select(self, event):
+        selected_item = self.challenges_tree.selection()[0]
+        challenge_id = self.challenges_tree.item(selected_item)['values'][0]
+        challenge_name = self.challenges_tree.item(selected_item)['values'][1]
+
+        if tk.messagebox.askyesno("Join Challenge", f"Do you want to join the challenge '{challenge_name}'?"):
+            try:
+                self.database.add_user_to_challenge(self.user_id, challenge_id)
+                tk.messagebox.showinfo("Success", f"You have successfully joined the challenge '{challenge_name}'")
+
+                # Refresh the TreeView
+                self.clear_treeview()
+                self.display_challenges()
+
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
+
+    def back_to_dashboard(self):
         self.window.destroy()
         DashboardWindow(self.database, self.user_id)
 
-    def create_layout(self):
-        top_frame = tk.Frame(self.window)
-        top_frame.pack(side='top', fill='x')
-
-        # Add Challenge button
-        add_challenge_button = tk.Button(top_frame, text="Add Challenge", command=self.open_add_challenge_window)
-        add_challenge_button.pack(side='left', padx=10, pady=10)
-
-        # Return to Dashboard button
-        return_button = tk.Button(top_frame, text="Return to Dashboard", command=self.return_to_dashboard)
-        return_button.pack(side='right', padx=10, pady=10)
-
-        # Challenges Treeview
-        self.challenges_tree = ttk.Treeview(self.window, columns=("Name", "TargetAmount", "CurrentAmount"), show='headings')
-        self.challenges_tree.heading("Name", text="Name")
-        self.challenges_tree.heading("TargetAmount", text="Target Amount")
-        self.challenges_tree.heading("CurrentAmount", text="Amount Saved")
-        self.challenges_tree.column("Name", width=200)
-        self.challenges_tree.column("TargetAmount", width=150)
-        self.challenges_tree.column("CurrentAmount", width=150)
-        self.challenges_tree.pack(side="top", fill="both", expand=True, padx=10, pady=10)
-
-        # Edit Challenge button (initially hidden)
-        self.edit_button = tk.Button(self.window, text="View/Edit Challenge", command=self.edit_selected_challenge)
-        self.edit_button.pack_forget()
-
-        # Bind selection event
-        self.challenges_tree.bind("<<TreeviewSelect>>", self.on_challenge_select)
-
-
-
-    def on_challenge_select(self, event):
-        selected = self.challenges_tree.selection()
-        if selected:
-            self.edit_button.pack(side='top', pady=10)
-        else:
-            self.edit_button.pack_forget()
-
-    def refresh_challenges(self):
-        self.challenge_id_map.clear()  # Clear the existing mapping
-        for item in self.challenges_tree.get_children():
-            self.challenges_tree.delete(item)
-
-        challenges = self.database.get_user_challenges(self.user_id)
-        for challenge in challenges:
-            tree_item = self.challenges_tree.insert('', 'end', values=(challenge[1], challenge[5], challenge[6]))
-            self.challenge_id_map[tree_item] = challenge[0]  # Map the Treeview item to the ChallengeID
-
-
-
-    def open_add_challenge_window(self):
-        AddChallengeWindow(self.database, self.user_id, self.refresh_challenges)
-
-    def on_challenge_select(self, event):
-        selected = self.challenges_tree.selection()
-        if selected:
-            item = selected[0]
-            self.selected_challenge_id = self.challenge_id_map[item]  # Store selected ChallengeID
-            self.edit_button.pack(side='top', pady=10)
-
-            # Debugging message
-            print(f"Selected Challenge ID: {self.selected_challenge_id}")
-        else:
-            self.edit_button.pack_forget()
-
-class AddChallengeWindow:
-    def __init__(self, database, user_id, refresh_callback):
-        self.database = database
-        self.user_id = user_id
-        self.refresh_callback = refresh_callback
-        self.add_window = tk.Toplevel()
-        self.add_window.title("Add New Challenge")
-        self.add_window.geometry("400x500")
-        self.create_widgets()
-
-    def create_widgets(self):
-        tk.Label(self.add_window, text="Name:").grid(row=0, column=0, sticky='w')
-        self.name_entry = tk.Entry(self.add_window)
-        self.name_entry.grid(row=0, column=1)
-
-        tk.Label(self.add_window, text="Description:").grid(row=1, column=0, sticky='nw')
-        self.description_text = tk.Text(self.add_window, height=10, width=30)
-        self.description_text.grid(row=1, column=1, sticky='w')
-
-        tk.Label(self.add_window, text="End Date (YYYY-MM-DD):").grid(row=2, column=0, sticky='w')
-        self.end_date_entry = tk.Entry(self.add_window)
-        self.end_date_entry.grid(row=2, column=1)
-
-        tk.Label(self.add_window, text="Target Amount:").grid(row=3, column=0, sticky='w')
-        self.target_amount_entry = tk.Entry(self.add_window)
-        self.target_amount_entry.grid(row=3, column=1)
-
-        submit_button = tk.Button(self.add_window, text="Submit", command=self.submit_challenge)
-        submit_button.grid(row=4, column=1, pady=10)
-
-    def submit_challenge(self):
-        name = self.name_entry.get()
-        description = self.description_text.get("1.0", tk.END).strip()
-        end_date = self.end_date_entry.get()
-        target_amount = self.target_amount_entry.get()
-
-        # Call the method with the required arguments
-        self.database.add_new_challenge(name, description, end_date, target_amount, self.user_id)
-
-        # Close the window and refresh the challenge list
-        self.add_window.destroy()
-        self.refresh_callback()
-
-class EditChallengeWindow:
-    def __init__(self, database, user_id, challenge_id, refresh_callback, name, target_amount, current_amount):
-        self.database = database
-        self.user_id = user_id
-        self.challenge_id = challenge_id
-
-
-        self.refresh_callback = refresh_callback
-        self.edit_window = tk.Toplevel()
-        self.edit_window.title("Edit Challenge")
-        self.edit_window.geometry("500x300")
-
-        self.create_widgets(name, target_amount, current_amount)
-
-    def create_widgets(self, name, target_amount, current_amount):
-        tk.Label(self.edit_window, text=f"Challenge: {name}").grid(row=0, column=0, sticky='w')
-        tk.Label(self.edit_window, text=f"Target: {target_amount}").grid(row=1, column=0, sticky='w')
-        tk.Label(self.edit_window, text=f"Saved: {current_amount}").grid(row=2, column=0, sticky='w')
-
-        delete_button = tk.Button(self.edit_window, text="Delete Challenge", command=self.delete_challenge)
-        delete_button.grid(row=3, column=0, pady=5)
-
-        self.amount_entry = tk.Entry(self.edit_window)
-        self.amount_entry.grid(row=4, column=0)
-
-
-        move_money_button = tk.Button(self.edit_window, text="Move Money to Challenge", command=self.move_money_to_challenge)
-        move_money_button.grid(row=5, column=0, pady=5)
-
-    def delete_challenge(self):
-        self.database.delete_challenge(self.challenge_id)
-        self.edit_window.destroy()
-        self.refresh_callback()
-
-    def move_money_to_challenge(self):
-        amount = float(self.amount_entry.get())
-        if self.database.move_money_to_challenge(self.user_id, self.challenge_id, amount):
-            messagebox.showinfo("Success", "Money moved to challenge successfully.")
-            self.edit_window.destroy()
-            self.refresh_callback()
-        else:
-            messagebox.showwarning("Insufficient Savings", "You do not have enough savings to complete this transaction.")
-class DashboardWindow:
+class SelectChallengeWindow:
     def __init__(self, database, user_id):
         self.database = database
         self.user_id = user_id
-        self.dashboard = tk.Tk()
-        self.dashboard.title("Dashboard")
-        self.dashboard.geometry("800x600")
+        self.window = tk.Tk()
+        self.window.title("Challenge Select")
+        self.window.geometry("1200x1200")
 
         self.create_widgets()
-        self.dashboard.mainloop()
+        self.display_challenges()
+        self.window.mainloop()
 
     def create_widgets(self):
-        user_info = self.database.get_user_info(self.user_id)
-        if user_info is None:
-            messagebox.showerror("Error", "Unable to retrieve user information.")
-            return
+        menubar = Menu(self.window)
+        self.window.config(menu=menubar)
+        menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
+        menubar.add_command(label="View Your Groups", command=self.View_your_groups_window)
 
-        # Add logout dropdown menu
-        def logout():
-            response = messagebox.askyesno("Logout", "Are you sure you want to log out?")
-            if response:
-                self.dashboard.destroy()  # Close the dashboard window
-                open_login_window()# Open the login window
+        tk.Label(self.window, text="Challenge View", font=("Arial", 24)).pack(pady=20)
 
-        # Create a menubar
-        menubar = Menu(self.dashboard)
-        self.dashboard.config(menu=menubar)
+        self.challenges_tree = ttk.Treeview(self.window, columns=('ChallengeID', 'Name', 'Description', 'StartDate', 'EndDate', 'TargetAmount'), show='headings')
+        self.challenges_tree.heading('ChallengeID', text='Challenge ID')
+        self.challenges_tree.heading('Name', text='Name')
+        self.challenges_tree.heading('Description', text='Description')
+        self.challenges_tree.heading('StartDate', text='Start Date')
+        self.challenges_tree.heading('EndDate', text='End Date')
+        self.challenges_tree.heading('TargetAmount', text='Target Amount')
+        self.challenges_tree.bind('<<TreeviewSelect>>', self.on_challange_select)
+        self.challenges_tree.pack(expand=True, fill='both')
 
-        # Create a menu
-        user_menu = Menu(menubar, tearoff=0)
-        menubar.add_cascade(label=f"{user_info[1]} {user_info[2]}", menu=user_menu)
-        user_menu.add_command(label="Log out", command=logout)
+    def View_your_groups_window(self):
+        self.window.destroy()
+        ChallengesWindow(self.database, self.user_id)
+    def display_challenges(self):
+        try:
+            challenges = self.database.get_challenges_user_not_member_of(self.user_id)
+            for challenge in challenges:
+                self.challenges_tree.insert('', 'end', values=challenge)
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"An error occurred while fetching challenges: {e}")
 
-        # Welcome label
-        welcome_label = tk.Label(self.dashboard, text=f"Welcome {user_info[1]}", font=("Arial", 24), bg="#FFDAB9")
-        welcome_label.pack(pady=20, fill='x')
+    def back_to_dashboard(self):
+        self.window.destroy()
+        DashboardWindow(self.database, self.user_id)
 
-        # Button style configuration
-        button_style = {'font': ("Arial", 16), 'border': 0, 'bg': "#FFA07A", 'activebackground': "#FF7F50", 'padx': 10, 'pady': 5}
+    def clear_treeview(self):
+        for item in self.challenges_tree.get_children():
+            self.challenges_tree.delete(item)
 
-        # View Savings Button
-        view_savings_button = tk.Button(self.dashboard, text="View Savings", **button_style, command=self.open_savings_window)
-        view_savings_button.pack(pady=10, ipadx=50, ipady=10)
+    def on_challange_select(self, event):
+        selected_item = self.challenges_tree.selection()[0]
+        challenge_id = self.challenges_tree.item(selected_item)['values'][0]
+        challenge_name = self.challenges_tree.item(selected_item)['values'][1]
 
-        # View Goals Button
-        view_goals_button = tk.Button(self.dashboard, text="View Challenges", **button_style, command=self.open_challenges_window)
-        view_goals_button.pack(pady=10, ipadx=50, ipady=10)
+        if tk.messagebox.askyesno("Join Challenge", f"Do you want to join the challenge '{challenge_name}'?"):
+            try:
+                self.database.add_user_to_challenge(self.user_id, challenge_id)
+                tk.messagebox.showinfo("Success", f"You have successfully joined the challenge '{challenge_name}'")
 
-        # View Projections Button
-        view_projections_button = tk.Button(self.dashboard, text="View Projections", **button_style)
-        view_projections_button.pack(pady=10, ipadx=50, ipady=10)
+                # Refresh the TreeView
+                self.clear_treeview()
+                self.display_challenges()
 
-        # Inbox Button
-        leader_button = tk.Button(self.dashboard, text="Leader Board", **button_style, command=self.open_leaderboard_window)
-        leader_button.pack(pady=10, ipadx=50, ipady=10)
-
-        leader_button = tk.Button(self.dashboard, text="View Groups", **button_style, command=self.open_groups_window)
-        leader_button.pack(pady=10, ipadx=50, ipady=10)
-
-    def open_groups_window(self):
-        self.dashboard.destroy()
-        GroupWindow(self.database, self.user_id)
-
-    def open_leaderboard_window(self):
-        self.dashboard.destroy()
-        OverallPlacementWindow(self.database, self.user_id)
-
-    def open_savings_window(self):
-        self.dashboard.destroy()  # Close the dashboard window
-        SavingsWindow(self.database, self.user_id)  # Open the savings window
-
-    def open_challenges_window(self):
-        self.dashboard.destroy()  # Close the dashboard window
-        ChallengesWindow(self.database, self.user_id)  # Open the challenges window
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"An error occurred: {e}")
 
 class GroupWindow:
     def __init__(self, database, user_id):
@@ -1426,6 +1267,7 @@ class GroupWindow:
             except Exception as e:
                 tk.messagebox.showerror("Error", f"An error occurred: {e}")
 
+
 class SelectGroupWindow:
     def __init__(self, database, user_id):
         self.database = database
@@ -1503,6 +1345,83 @@ class SelectGroupWindow:
     def back_to_dashboard(self):
         self.window.destroy()  # Close the savings window
         DashboardWindow(self.database, self.user_id)
+class DashboardWindow:
+    def __init__(self, database, user_id):
+        self.database = database
+        self.user_id = user_id
+        self.dashboard = tk.Tk()
+        self.dashboard.title("Dashboard")
+        self.dashboard.geometry("800x600")
+
+        self.create_widgets()
+        self.dashboard.mainloop()
+
+    def create_widgets(self):
+        user_info = self.database.get_user_info(self.user_id)
+        if user_info is None:
+            messagebox.showerror("Error", "Unable to retrieve user information.")
+            return
+
+        # Add logout dropdown menu
+        def logout():
+            response = messagebox.askyesno("Logout", "Are you sure you want to log out?")
+            if response:
+                self.dashboard.destroy()  # Close the dashboard window
+                open_login_window()# Open the login window
+
+        # Create a menubar
+        menubar = Menu(self.dashboard)
+        self.dashboard.config(menu=menubar)
+
+        # Create a menu
+        user_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label=f"{user_info[1]} {user_info[2]}", menu=user_menu)
+        user_menu.add_command(label="Log out", command=logout)
+
+        # Welcome label
+        welcome_label = tk.Label(self.dashboard, text=f"Welcome {user_info[1]}", font=("Arial", 24), bg="#FFDAB9")
+        welcome_label.pack(pady=20, fill='x')
+
+        # Button style configuration
+        button_style = {'font': ("Arial", 16), 'border': 0, 'bg': "#FFA07A", 'activebackground': "#FF7F50", 'padx': 10, 'pady': 5}
+
+        # View Savings Button
+        view_savings_button = tk.Button(self.dashboard, text="View Savings", **button_style, command=self.open_savings_window)
+        view_savings_button.pack(pady=10, ipadx=50, ipady=10)
+
+        # View Goals Button
+        view_goals_button = tk.Button(self.dashboard, text="View Challenges", **button_style, command=self.open_challenges_window)
+        view_goals_button.pack(pady=10, ipadx=50, ipady=10)
+
+        # View Projections Button
+        view_projections_button = tk.Button(self.dashboard, text="View Projections", **button_style)
+        view_projections_button.pack(pady=10, ipadx=50, ipady=10)
+
+        # Inbox Button
+        leader_button = tk.Button(self.dashboard, text="Leader Board", **button_style, command=self.open_leaderboard_window)
+        leader_button.pack(pady=10, ipadx=50, ipady=10)
+
+        leader_button = tk.Button(self.dashboard, text="View Groups", **button_style, command=self.open_groups_window)
+        leader_button.pack(pady=10, ipadx=50, ipady=10)
+
+    def open_groups_window(self):
+        self.dashboard.destroy()
+        GroupWindow(self.database, self.user_id)
+
+    def open_leaderboard_window(self):
+        self.dashboard.destroy()
+        OverallPlacementWindow(self.database, self.user_id)
+
+    def open_savings_window(self):
+        self.dashboard.destroy()  # Close the dashboard window
+        SavingsWindow(self.database, self.user_id)  # Open the savings window
+
+    def open_challenges_window(self):
+        self.dashboard.destroy()  # Close the dashboard window
+        ChallengesWindow(self.database, self.user_id)  # Open the challenges window
+
+
+
 
 class SavingsLeaderboardWindow:
     def __init__(self, database, user_id):
