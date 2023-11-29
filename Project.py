@@ -534,13 +534,15 @@ class SavingsWindow:
         refresh_button.grid(row=0, column=4, padx=5)
 
         # Treeview for displaying savings
-        self.savings_tree = ttk.Treeview(self.window, columns=("Type", "Amount", "Purpose/Category", "Date"), show='headings')
+        self.savings_tree = ttk.Treeview(self.window, columns=("Type", "ID", "Amount", "Purpose/Category", "Date"), show='headings')
         self.savings_tree.column("Type", width=60)  # New column for type
+        self.savings_tree.column("ID", width=50)    # Adjust the width as needed
         self.savings_tree.column("Amount", width=100)  # Adjust the width as needed
         self.savings_tree.column("Purpose/Category", width=150) # Adjust the width as needed
         self.savings_tree.column("Date", width=100)    # Adjust the width as needed
 
         self.savings_tree.heading("Type", text="Type")
+        self.savings_tree.heading("ID", text="ID")
         self.savings_tree.heading("Amount", text="Amount")
         self.savings_tree.heading("Purpose/Category", text="Purpose/Category")
         self.savings_tree.heading("Date", text="Date")
@@ -560,18 +562,16 @@ class SavingsWindow:
             savings = self.database.get_user_savings(self.user_id, sort_by, order)
             for saving in savings:
                 # Assuming saving tuple is in the format: (SavingsID, UserID, Amount, Purpose, Date)
-                # Omit the SavingsID and UserID
-                combined_data.append(('Saving', saving[2], saving[3], saving[4]))
+                combined_data.append(('Saving', saving[0], saving[2], saving[3], saving[4]))
 
         if filter_type in ['both', 'expenses']:
             expenses = self.database.get_user_expenses(self.user_id, sort_by, order)
             for expense in expenses:
                 # Assuming expense tuple is in the format: (ExpenseID, UserID, Amount, Category, Date)
-                # Omit the ExpenseID and UserID
-                combined_data.append(('Expense', expense[2], expense[3], expense[4]))
+                combined_data.append(('Expense', expense[0], expense[2], expense[3], expense[4]))
 
-        # Adjusting the lambda for sorting
-        sort_index = {'date': 3, 'amount': 1}.get(sort_by, 3)  # Mapping sort_by to the correct index in the tuple
+        # Sort the combined data
+        sort_index = 4 if sort_by == 'date' else 2  # Adjust based on your sorting criteria
         combined_data.sort(key=lambda x: x[sort_index], reverse=(order == 'desc'))
 
         # Insert sorted data into the treeview
@@ -580,8 +580,6 @@ class SavingsWindow:
 
         self.savings_tree.tag_configure('saving', background='lightgreen')
         self.savings_tree.tag_configure('expense', background='lightcoral')
-
-
 
 
     def back_to_dashboard(self):
