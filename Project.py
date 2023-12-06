@@ -295,12 +295,12 @@ class Database:
                 )
                 conn.commit()
 
-    def edit_expense(self, user_id, expense_id, new_amount, new_category, new_date):
+    def edit_expense(self, user_id, expense_id, new_amount, new_category):
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE Expenses SET Amount = %s, Category = %s, Date = %s WHERE UserID = %s AND ExpenseID = %s",
-                    (new_amount, new_category, new_date, user_id, expense_id)
+                    "UPDATE Expenses SET Amount = %s, Category = %s WHERE UserID = %s AND ExpenseID = %s",
+                    (new_amount, new_category, user_id, expense_id)
                 )
                 conn.commit()
             
@@ -388,6 +388,15 @@ class Database:
                     return total_savings - total_expenses
                 else:
                     return 0  # Or handle the user not found case appropriately
+
+    def get_total_net_worth_for_user(self, user_id):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT NetWorth FROM TotalNetWorth WHERE UserID = %s", (user_id,))
+                result = cur.fetchone()
+                return result[0] if result else 0
+
+
 class LoginWindow:
     def __init__(self, database):
         self.database = database
@@ -623,9 +632,9 @@ class SavingsWindow:
 
     def submit_delete_expense(self, expense_id, window):
         # Implement the logic to delete a saving from the database
-        self.database.de(self.user_id, expense_id)
+        self.database.delete_expense(self.user_id, expense_id)
         window.destroy()
-        messagebox.showinfo("Success", "Saving deleted successfully.")
+        messagebox.showinfo("Success", "Expense deleted successfully.")
     
 
     def edit_expense(self):
@@ -933,9 +942,9 @@ class SavingsStatsWindow:
 
     def submit_delete_expense(self, expense_id, window):
         # Implement the logic to delete a saving from the database
-        self.database.de(self.user_id, expense_id)
+        self.database.delete_expense(self.user_id, expense_id)
         window.destroy()
-        messagebox.showinfo("Success", "Saving deleted successfully.")
+        messagebox.showinfo("Success", "Expense deleted successfully.")
     
 
     def edit_expense(self):
@@ -960,6 +969,7 @@ class SavingsStatsWindow:
         submit_button.grid(row=3, column=1, pady=10)
 
     def submit_edit_expense(self, expense_id, new_amount, new_purpose, window):
+        print("test")
         # Implement the logic to edit a saving in the database
         self.database.edit_expense(self.user_id, expense_id, new_amount, new_purpose)
         window.destroy()
@@ -1053,7 +1063,7 @@ class SelectChallengeWindow:
         menubar = Menu(self.window)
         self.window.config(menu=menubar)
         menubar.add_command(label="Back to Dashboard", command=self.back_to_dashboard)
-        menubar.add_command(label="View Your Groups", command=self.View_your_groups_window)
+        menubar.add_command(label="View Your Challenges", command=self.View_your_Challenges_window)
 
         tk.Label(self.window, text="Challenge View", font=("Arial", 24)).pack(pady=20)
 
@@ -1071,7 +1081,7 @@ class SelectChallengeWindow:
         self.challenges_tree.bind('<<TreeviewSelect>>', self.on_challange_select)
         self.challenges_tree.pack(expand=True, fill='both')
 
-    def View_your_groups_window(self):
+    def View_your_Challenges_window(self):
         self.window.destroy()
         ChallengesWindow(self.database, self.user_id)
     def display_challenges(self):
@@ -1370,13 +1380,20 @@ class DashboardWindow:
 
         self.create_widgets()
         self.dashboard.mainloop()
-
+    def get_net_worth(self):
+        net_worth = self.database.get_total_net_worth_for_user(self.user_id)
+        return net_worth
     def create_widgets(self):
         user_info = self.database.get_user_info(self.user_id)
         if user_info is None:
             messagebox.showerror("Error", "Unable to retrieve user information.")
             return
-
+        net_worth = self.get_net_worth()
+        if net_worth is not None:
+            net_worth_label = tk.Label(self.dashboard, text=f"Your Net Worth: {net_worth}", font=("Arial", 16), bg="#FFDAB9")
+            net_worth_label.pack(pady=10, fill='x')
+        else:
+            messagebox.showerror("Error", "Unable to retrieve net worth information.")
         # Add logout dropdown menu
         def logout():
             response = messagebox.askyesno("Logout", "Are you sure you want to log out?")
